@@ -178,8 +178,8 @@ local function handler_factory(opts, line, bufnr)
     local function code_action_handler(responses)
         -- Check for available code actions from all LSP server responses
         local has_actions = false
-        for client_id, resp in ipairs(responses) do
-            if resp.result and not opts.ignored_clients[tostring(client_id)] and not vim.tbl_isempty(resp.result) then
+        for client_id, resp in pairs(responses) do
+            if resp.result and opts.avaliable_clients[tostring(client_id)] and not vim.tbl_isempty(resp.result) then
                 has_actions = true
                 break
             end
@@ -220,17 +220,14 @@ local function handler_factory(opts, line, bufnr)
 end
 
 M.check = function()
-    local opts = vim.tbl_deep_extend("force", { ignored_clients = {} }, M.config)
+    local opts = vim.tbl_deep_extend("force", { avaliable_clients = {} }, M.config)
     local code_action_cap_found = false
     local active_clients = vim.lsp.get_active_clients()
     for _, client in pairs(active_clients) do
         if client then
-            if client.supports_method("textDocument/codeAction") then
-                if contains(M.config.ignore, client.name) then
-                    opts.ignored_clients[tostring(client.id)] = true
-                else
-                    code_action_cap_found = true
-                end
+            if client.supports_method("textDocument/codeAction") and not contains(M.config.ignore, client.name) then
+                opts.avaliable_clients[tostring(client.id)] = true
+                code_action_cap_found = true
             end
         end
     end
