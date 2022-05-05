@@ -35,13 +35,15 @@ M.special_buffers = {
     ["startuptime"] = true,
 }
 
--- local function check_lsp_active()
---   local active_clients = vim.lsp.get_active_clients()
---   if next(active_clients) == nil then
---     return false, "[lspsaga] No lsp client available"
---   end
---   return true, nil
--- end
+local SIGN_GROUP = "lightbulb"
+local SIGN_NAME = "LightBulbSign"
+local LIGHTBULB_FLOAT_HL = "LightBulbFloatWin"
+local LIGHTBULB_VIRTUAL_TEXT_HL = "LightBulbVirtualText"
+local LIGHTBULB_VIRTUAL_TEXT_NS = vim.api.nvim_create_namespace("lightbulb")
+
+if vim.tbl_isempty(vim.fn.sign_getdefined(SIGN_NAME)) then
+    vim.fn.sign_define(SIGN_NAME, { text = "💡", texthl = "LspDiagnosticsDefaultInformation" })
+end
 
 local function contains(tbl, val)
     for _, value in ipairs(tbl) do
@@ -49,8 +51,102 @@ local function contains(tbl, val)
             return true
         end
     end
-
     return false
+end
+
+--- Update lightbulb float.
+---
+--- @param opts table Available options for the float handler
+--- @param bufnr number|nil Buffer handle
+---
+--- @private
+local function _update_float(opts, bufnr)
+    bufnr = bufnr or vim.api.nvim_get_current_buf()
+    -- prevent `open_floating_preview` close the previous floating window
+    vim.api.nvim_buf_set_var(bufnr, "lsp_floating_preview", nil)
+
+    -- check if another lightbulb floating window already exists for this buffer
+    -- and close it if needed
+    local existing_float = vim.F.npcall(vim.api.nvim_buf_get_var, bufnr, "lightbulb_floating_window")
+    if existing_float and vim.api.nvim_win_is_valid(existing_float) then
+      vim.api.nvim_win_close(existing_float, true)
+    end
+
+    local _, win = vim.lsp.util.open_floating_preview({ opts.text }, "plaintext", opts.win_opts)
+    vim.api.nvim_win_set_option(win, "winhl", "Normal:" .. LIGHTBULB_FLOAT_HL)
+
+    -- Manually anchor float because `open_floating_preview` doesn't support that option
+    if opts.win_opts["anchor"] ~= nil then
+        vim.api.nvim_win_set_config(win, { anchor = opts.win_opts.anchor })
+    end
+
+    if opts.win_opts["winblend"] ~= nil then
+        vim.api.nvim_win_set_option(win, "winblend", opts.win_opts.winblend)
+    end
+
+    vim.api.nvim_buf_set_var(bufnr, "lightbulb_floating_window", win)
+end
+
+--- Update sign position from `old_line` to `new_line`.
+---
+--- Either line can be optional, and will result in just adding/removing
+--- the sign on the given line.
+---
+--- @param priority number The priority of the sign to add
+--- @param old_line number|nil The line to remove the sign on
+--- @param new_line number|nil The line to add the sign on
+--- @param bufnr number|nil Buffer handle
+---
+--- @private
+local function _update_sign(priority, old_line, new_line, bufnr)
+    bufnr = bufnr or "%"
+
+    if old_line then
+        vim.fn.sign_unplace(
+            SIGN_GROUP, { id = old_line, buffer = bufnr }
+        )
+
+        -- Update current lightbulb line
+        vim.b.lightbulb_line = nil
+    end
+
+    -- Avoid redrawing lightbulb if code action line did not change
+    if new_line and (vim.b.lightbulb_line ~= new_line) then
+        vim.fn.sign_place(
+            new_line, SIGN_GROUP, SIGN_NAME, bufnr,
+            { lnum = new_line, priority = priority }
+        )
+        -- Update current lightbulb line
+        vim.b.lightbulb_line = new_line
+    end
+end
+
+--- Update lightbulb virtual text.
+---
+--- @param opts table Available options for the virtual text handler
+--- @param line number|nil The line to add the virtual text
+--- @param bufnr number|nil Buffer handle
+---
+--- @private
+local function _update_virtual_text(opts, line, bufnr)
+    bufnr = bufnr or vim.api.nvim_get_current_buf()
+    vim.api.nvim_buf_clear_namespace(bufnr, LIGHTBULB_VIRTUAL_TEXT_NS, 0, -1)
+
+    if line then
+        vim.api.nvim_buf_set_extmark(
+            bufnr, LIGHTBULB_VIRTUAL_TEXT_NS, line, -1, { virt_text = {{ opts.text, LIGHTBULB_VIRTUAL_TEXT_HL }}, hl_mode = opts.hl_mode }
+        )
+    end
+end
+
+--- Update lightbulb status text
+---
+--- @param text string The new status text
+--- @param bufnr number|nil Buffer handle
+---
+local function _update_status_text(text, bufnr)
+    bufnr = bufnr or vim.api.nvim_get_current_buf()
+    vim.api.nvim_buf_set_var(bufnr, 'current_lightbulb_status_text', text)
 end
 
 --- Patch for breaking neovim master update to LSP handlers
@@ -83,42 +179,40 @@ local function handler_factory(opts, line, bufnr)
         -- Check for available code actions from all LSP server responses
         local has_actions = false
         for client_id, resp in ipairs(responses) do
-            if resp.result and not opts.ignored_clients[client_id] and not vim.tbl_isempty(resp.result) then
+            if resp.result and not opts.ignored_clients[tostring(client_id)] and not vim.tbl_isempty(resp.result) then
                 has_actions = true
                 break
             end
         end
 
-        require("luadev").print(tostring(had_actions))
+        -- No available code actions
+        if not has_actions then
+            if opts.sign.enabled then
+                _update_sign(opts.sign.priority, vim.b.lightbulb_line, nil, bufnr)
+            end
+            if opts.virtual_text.enabled then
+                _update_virtual_text(opts.virtual_text, nil, bufnr)
+            end
+            if opts.status_text.enabled then
+                _update_status_text(opts.status_text.text_unavailable, bufnr)
+            end
+        else
+            if opts.sign.enabled then
+                _update_sign(opts.sign.priority, vim.b.lightbulb_line, line + 1, bufnr)
+            end
 
-        -- -- No available code actions
-        -- if not has_actions then
-        --     if opts.sign.enabled then
-        --         _update_sign(opts.sign.priority, vim.b.lightbulb_line, nil, bufnr)
-        --     end
-        --     if opts.virtual_text.enabled then
-        --         _update_virtual_text(opts.virtual_text, nil, bufnr)
-        --     end
-        --     if opts.status_text.enabled then
-        --         _update_status_text(opts.status_text.text_unavailable, bufnr)
-        --     end
-        -- else
-        --     if opts.sign.enabled then
-        --         _update_sign(opts.sign.priority, vim.b.lightbulb_line, line + 1, bufnr)
-        --     end
-        --
-        --     if opts.float.enabled then
-        --         _update_float(opts.float, bufnr)
-        --     end
-        --
-        --     if opts.virtual_text.enabled then
-        --         _update_virtual_text(opts.virtual_text, line, bufnr)
-        --     end
-        --
-        --     if opts.status_text.enabled then
-        --         _update_status_text(opts.status_text.text, bufnr)
-        --     end
-        -- end
+            if opts.float.enabled then
+                _update_float(opts.float, bufnr)
+            end
+
+            if opts.virtual_text.enabled then
+                _update_virtual_text(opts.virtual_text, line, bufnr)
+            end
+
+            if opts.status_text.enabled then
+                _update_status_text(opts.status_text.text, bufnr)
+            end
+        end
 
     end
 
@@ -126,14 +220,14 @@ local function handler_factory(opts, line, bufnr)
 end
 
 M.check = function()
-    local opts = { ignored_clients = {} }
+    local opts = vim.tbl_deep_extend("force", { ignored_clients = {} }, M.config)
     local code_action_cap_found = false
     local active_clients = vim.lsp.get_active_clients()
     for _, client in pairs(active_clients) do
         if client then
             if client.supports_method("textDocument/codeAction") then
                 if contains(M.config.ignore, client.name) then
-                    opts.ignored_clients[client.id] = true
+                    opts.ignored_clients[tostring(client.id)] = true
                 else
                     code_action_cap_found = true
                 end
@@ -147,32 +241,6 @@ M.check = function()
     if not code_action_cap_found or not is_file or M.special_buffers[vim.bo.filetype] then
         return
     end
-
-    -- if M.servers[current_file] == nil then
-    --   vim.lsp.for_each_buffer_client(vim.api.nvim_get_current_buf(), function(client)
-    --       if M.servers[current_file] then return end
-    --       local is_nightly = vim.fn.has("nvim-0.8.0")
-    --       local code_action_provider = nil
-    --       if is_nightly then
-    --         code_action_provider = client.server_capabilities.codeActionProvider
-    --       else
-    --         code_action_provider = client.resolved_capabilities.code_action
-    --       end
-    --       if code_action_provider and client.supports_method "code_action"
-    --       then
-    --         M.servers[current_file] = true
-    --       end
-    --     end
-    --   )
-    --
-    --   if M.servers[current_file] == nil then
-    --     M.servers[current_file] = false
-    --   end
-    -- end
-
-    -- if M.servers[current_file] == false then
-    --   return
-    -- end
 
     local context = { diagnostics = vim.lsp.diagnostic.get_line_diagnostics() }
     local params = vim.lsp.util.make_range_params()
