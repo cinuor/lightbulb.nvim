@@ -4,6 +4,7 @@ M.config = {
     sign = {
         enabled = true,
         priority = 10,
+        text = "💡",
     },
     float = {
         enabled = false,
@@ -40,10 +41,6 @@ local SIGN_NAME = "LightBulbSign"
 local LIGHTBULB_FLOAT_HL = "LightBulbFloatWin"
 local LIGHTBULB_VIRTUAL_TEXT_HL = "LightBulbVirtualText"
 local LIGHTBULB_VIRTUAL_TEXT_NS = vim.api.nvim_create_namespace("lightbulb")
-
-if vim.tbl_isempty(vim.fn.sign_getdefined(SIGN_NAME)) then
-    vim.fn.sign_define(SIGN_NAME, { text = "💡", texthl = "LspDiagnosticsDefaultInformation" })
-end
 
 local function contains(tbl, val)
     for _, value in ipairs(tbl) do
@@ -252,6 +249,11 @@ end
 M.setup = function(opts)
   opts = opts or {}
   M.config = vim.tbl_deep_extend("force", M.config, opts)
+
+  if vim.tbl_isempty(vim.fn.sign_getdefined(SIGN_NAME)) then
+      vim.fn.sign_define(SIGN_NAME, { text = M.config.sign.text, texthl = "LspDiagnosticsDefaultInformation" })
+  end
+
 end
 
 
