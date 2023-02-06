@@ -251,7 +251,7 @@ M.setup = function(opts)
   M.config = vim.tbl_deep_extend("force", M.config, opts)
 
   if vim.tbl_isempty(vim.fn.sign_getdefined(SIGN_NAME)) then
-      vim.fn.sign_define(SIGN_NAME, { text = M.config.sign.text, texthl = "LspDiagnosticsDefaultInformation" })
+      vim.fn.sign_define(SIGN_NAME, { text = M.config.sign.text, texthl = "LightBulb" })
   end
 
 end
